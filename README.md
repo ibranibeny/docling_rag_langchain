@@ -1,8 +1,8 @@
 # Secure RAG Chatbot with Image Annotation
 
-A production-ready RAG (Retrieval-Augmented Generation) chatbot with advanced image annotation capabilities, Azure Content Safety integration, and conversation memory.
+RAG (Retrieval-Augmented Generation) chatbot with advanced image annotation capabilities, Azure Content Safety integration, and conversation memory.
 
-## 🌟 Features
+## Features
 
 ### Document Processing
 - **PDF Upload & Processing**: Upload custom PDFs or use default documents
@@ -37,7 +37,7 @@ A production-ready RAG (Retrieval-Augmented Generation) chatbot with advanced im
 - **Ollama**: Installed and running
 - **Azure Account**: For Content Safety API
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Environment Setup
 
