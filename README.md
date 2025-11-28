@@ -273,11 +273,11 @@ For contributions, please:
 3. Test thoroughly
 4. Submit pull request with description
 
-## 📄 License
+## License
 
 MIT License - See repository for details
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **Docling**: Document processing framework
 - **LangChain**: RAG orchestration
@@ -286,15 +286,12 @@ MIT License - See repository for details
 - **Azure**: Content Safety API
 - **Streamlit**: UI framework
 
-## 📞 Support
 
 For issues or questions:
 - Check [CODE_GUIDE.md](CODE_GUIDE.md) for architecture details
 - Review [FLOW_DIAGRAM.md](FLOW_DIAGRAM.md) for system flow
-- Check GitHub Issues for known problems
 
 ---
 
 **Version**: 1.0.0  
 **Last Updated**: November 2025  
-**Maintained By**: Your Team
