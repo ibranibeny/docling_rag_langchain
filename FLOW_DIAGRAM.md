@@ -1,0 +1,971 @@
+# System Flow Diagram
+
+## 📊 Visual Architecture Overview
+
+This document provides text-based flow diagrams to visualize the system architecture, data flow, and component interactions.
+
+---
+
+## 🏗️ High-Level System Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│                          USER INTERFACE LAYER                           │
+│                        (Streamlit Frontend)                             │
+│                                                                         │
+│  ┌───────────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
+│  │                   │  │                  │  │                  │   │
+│  │   Sidebar Panel   │  │   Main Chat Area │  │   Input Widget   │   │
+│  │   - Upload PDF    │  │   - Messages     │  │   - Questions    │   │
+│  │   - Process Btn   │  │   - Images       │  │   - Streaming    │   │
+│  │   - Statistics    │  │   - Progress     │  │                  │   │
+│  │                   │  │                  │  │                  │   │
+│  └─────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘   │
+│            │                     │                     │              │
+└────────────┼─────────────────────┼─────────────────────┼──────────────┘
+             │                     │                     │
+             │                     │                     │
+             └──────────┬──────────┴─────────┬───────────┘
+                        │                    │
+                        ▼                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│                      APPLICATION LOGIC LAYER                            │
+│                      (Python Classes)                                   │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │                                                                   │ │
+│  │               ContentSafetyGuard                                 │ │
+│  │                                                                   │ │
+│  │   Input ──→ detect_jailbreak() ──→ check_content() ──→ Output   │ │
+│  │              (Pattern Match)        (Azure API)                  │ │
+│  │                                                                   │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │                                                                   │ │
+│  │               ImageAnnotator                                      │ │
+│  │                                                                   │ │
+│  │   Images ──→ Save to File ──→ VLM Inference ──→ Descriptions    │ │
+│  │             (PictureItems)    (Ollama Vision)   (500-1000 words) │ │
+│  │                                                                   │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐ │
+│  │                                                                   │ │
+│  │         SecureChatbotRAGWithImages (Main Orchestrator)           │ │
+│  │                                                                   │ │
+│  │   process_document() ────────────────┐                           │ │
+│  │   - Docling conversion               │                           │ │
+│  │   - Image annotation                 ├──→ VectorDB               │ │
+│  │   - Chunking                         │    (ChromaDB)             │ │
+│  │   - Embedding                        │                           │ │
+│  │                                      │                           │ │
+│  │   stream_response() ─────────────────┘                           │ │
+│  │   - Validation                                                    │ │
+│  │   - Retrieval                                                     │ │
+│  │   - Re-ranking                                                    │ │
+│  │   - Generation                                                    │ │
+│  │                                                                   │ │
+│  └──────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+└────────────────────────────────────┬───────────────────────────────────┘
+                                     │
+                                     │
+                                     ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│                      EXTERNAL SERVICES LAYER                            │
+│                                                                         │
+│  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐  ┌───────────┐  │
+│  │             │  │              │  │              │  │           │  │
+│  │   Ollama    │  │  ChromaDB    │  │    Azure     │  │  Docling  │  │
+│  │   Server    │  │  VectorDB    │  │   Content    │  │  Library  │  │
+│  │             │  │              │  │   Safety     │  │           │  │
+│  │  - Text LLM │  │  - Embeddings│  │   - API      │  │  - PDF    │  │
+│  │  - Vision   │  │  - Search    │  │   - Moderation│  │    Parser │  │
+│  │    LLM      │  │  - Persist   │  │              │  │           │  │
+│  │             │  │              │  │              │  │           │  │
+│  └─────────────┘  └──────────────┘  └──────────────┘  └───────────┘  │
+│                                                                         │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📝 Document Processing Pipeline
+
+### Full Document Processing Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      DOCUMENT UPLOAD & PROCESSING                        │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    ┌──────────────┐
+    │ User uploads │
+    │  PDF file    │
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────────────────────────┐
+    │ Streamlit saves to               │
+    │ uploaded_pdfs/                   │
+    └──────┬───────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────┐
+    │ User clicks                      │
+    │ "🚀 Process Document"            │
+    └──────┬───────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       STEP 1: DELETE OLD DATA                             │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────┐
+    │ Check for existing ChromaDB      │
+    │ collection                       │
+    └──────┬───────────────────────────┘
+           │
+           ├─── Collection exists? ───┐
+           │                          │
+           │ Yes                      │ No
+           ▼                          │
+    ┌──────────────────────┐          │
+    │ Delete collection    │          │
+    │ chatbot.vectorstore  │          │
+    │ .delete_collection() │          │
+    └──────┬───────────────┘          │
+           │                          │
+           └──────────┬───────────────┘
+                      │
+                      ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      STEP 2: DOCLING CONVERSION                           │
+└──────────────────────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+    ┌──────────────────────────────────────────────┐
+    │ Initialize DocumentConverter                 │
+    │ with PdfPipelineOptions:                     │
+    │  - images_scale=2.0                          │
+    │  - generate_picture_images=True              │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Convert PDF to DoclingDocument               │
+    │  - Extract text content                      │
+    │  - Extract tables                            │
+    │  - Extract images/figures (PictureItems)     │
+    │  - Parse document structure                  │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Result: DoclingDocument object               │
+    │  - doc.export_to_markdown()                  │
+    │  - doc.pictures (List[PictureItem])          │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                     STEP 3: IMAGE ANNOTATION                              │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Count images: len(doc.pictures)              │
+    └──────┬───────────────────────────────────────┘
+           │
+           ├─── Has images? ────┐
+           │                    │
+           │ Yes                │ No → Skip to Step 4
+           ▼                    │
+    ┌──────────────────────────────────────────────┐
+    │ For each PictureItem:                        │
+    │                                              │
+    │   1. Save image to temp file                 │
+    │      - picture.image.pil_image.save()        │
+    │                                              │
+    │   2. Call Vision LLM                         │
+    │      - describe_image_with_vlm()             │
+    │      - Ollama llama3.2-vision:11b-q8_0       │
+    │      - 7-section structured prompt           │
+    │      - Generate 500-1000 word description    │
+    │                                              │
+    │   3. Store annotation                        │
+    │      - annotations[index] = {                │
+    │          'uri': image_path,                  │
+    │          'description': vlm_output           │
+    │        }                                     │
+    │                                              │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Merge annotations into document text         │
+    │  - Insert "IMAGE X DESCRIPTION: [...]"       │
+    │    near each figure                          │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                       STEP 4: TEXT CHUNKING                               │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Initialize HybridChunker                     │
+    │  - tokenizer="BAAI/bge-base-en-v1.5"         │
+    │  - max_tokens=1024                           │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ chunker.chunk(doc)                           │
+    │  - Smart text splitting                      │
+    │  - Respects sentence boundaries              │
+    │  - Tokenizer-aware (no truncation)           │
+    │  - Returns List[BaseChunk]                   │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Contextualize chunks                         │
+    │  - HybridChunker.serialize(doc, chunks)      │
+    │  - Adds document metadata                    │
+    │  - Creates LangChain Documents               │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                   STEP 5: VECTOR EMBEDDING                                │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Initialize HuggingFaceEmbeddings             │
+    │  - model_name="BAAI/bge-base-en-v1.5"        │
+    │  - model_kwargs={'device': 'cpu'}            │
+    │  - Output: 768-dimensional vectors           │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Create ChromaDB VectorStore                  │
+    │  - Chroma.from_documents()                   │
+    │  - documents=chunks (contextualized)         │
+    │  - embedding=embeddings                      │
+    │  - persist_directory="./chroma_db"           │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Result: Searchable vector database           │
+    │  - Ready for similarity_search()             │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    STEP 6: RAG CHAIN SETUP                                │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Create RAG components:                       │
+    │  - Retriever: vectorstore.as_retriever()     │
+    │  - LLM: Ollama("llama3.1:8b")                │
+    │  - Prompt: ChatPromptTemplate with           │
+    │    {chat_history}, {context}, {question}     │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Return processing statistics:                │
+    │  - num_chunks: int                           │
+    │  - num_images: int                           │
+    │  - annotations: dict                         │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Update Streamlit session state               │
+    │  - st.session_state.initialized = True       │
+    │  - st.session_state.chatbot = instance       │
+    │  - st.session_state.processing_stats = stats │
+    │  - st.session_state.annotations = images     │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Display success message                      │
+    │ "✅ Document processed successfully!"        │
+    └──────────────────────────────────────────────┘
+```
+
+---
+
+## 💬 Question Answering Pipeline
+
+### Full Q&A Flow with Safety Checks
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        USER ASKS QUESTION                                │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    ┌──────────────┐
+    │ User types   │
+    │ question     │
+    │ in chat      │
+    └──────┬───────┘
+           │
+           ▼
+    ┌──────────────────────────────────┐
+    │ Streamlit captures input         │
+    │ via st.chat_input()              │
+    └──────┬───────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────┐
+    │ Display user message in chat     │
+    │ st.chat_message("user")          │
+    └──────┬───────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                   PHASE 1: INPUT VALIDATION                               │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ ContentSafetyGuard.detect_jailbreak()        │
+    │  - Check 15 patterns                         │
+    │    * "ignore previous"                       │
+    │    * "abaikan instruksi"                     │
+    │    * "act as", "pretend to be"               │
+    │    * etc.                                    │
+    └──────┬───────────────────────────────────────┘
+           │
+           ├─── Jailbreak detected? ────┐
+           │                             │
+           │ No                          │ Yes
+           │                             ▼
+           │                    ┌─────────────────────────┐
+           │                    │ Return error message    │
+           │                    │ "⚠️ Jailbreak detected" │
+           │                    │ Stop processing         │
+           │                    └─────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ ContentSafetyGuard.check_content()           │
+    │  - Call Azure Content Safety API             │
+    │  - Categories: Hate, Sexual, Violence, Harm  │
+    │  - Thresholds: [0, 2, 4, 4]                  │
+    └──────┬───────────────────────────────────────┘
+           │
+           ├─── Content unsafe? ────┐
+           │                        │
+           │ No                     │ Yes
+           │                        ▼
+           │               ┌─────────────────────────────┐
+           │               │ Return policy violation     │
+           │               │ "CONTENT POLICY VIOLATION"  │
+           │               │ Increment violation counter │
+           │               └─────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                  PHASE 2: RETRIEVAL & RE-RANKING                          │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Embed question with BGE-base                 │
+    │  - HuggingFaceEmbeddings.embed_query()       │
+    │  - Returns: 768-dim vector                   │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ ChromaDB similarity_search()                 │
+    │  - Cosine similarity with question vector    │
+    │  - k=10 (retrieve 10 candidates)             │
+    │  - Returns: List[Document]                   │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ CrossEncoder re-ranking                      │
+    │  - For each doc:                             │
+    │    * Create pair: [question, doc.content]    │
+    │    * CrossEncoder.predict(pair)              │
+    │    * Get relevance score                     │
+    │  - Sort by score (descending)                │
+    │  - Take top 5 documents                      │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    PHASE 3: CONTEXT PREPARATION                           │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Format chat history                          │
+    │  - Take last 3 exchanges (6 messages)        │
+    │  - Format: "Human: {q}\nAI: {a}"             │
+    │  - Join with "\n\n"                          │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Format context chunks                        │
+    │  - Concatenate top 5 documents               │
+    │  - Join with "\n\n"                          │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Build prompt from template                   │
+    │  - System message                            │
+    │  - chat_history: formatted history           │
+    │  - context: top 5 chunks                     │
+    │  - question: user's question                 │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    PHASE 4: ANSWER GENERATION                             │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Ollama LLM streaming inference               │
+    │  - Model: llama3.1:8b                        │
+    │  - Temperature: 0.7                          │
+    │  - Stream: True                              │
+    │                                              │
+    │  For each token:                             │
+    │    ├─→ Yield token                           │
+    │    ├─→ Display in UI immediately             │
+    │    └─→ Append to full_response               │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Collect complete response                    │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    PHASE 5: OUTPUT VALIDATION                             │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ ContentSafetyGuard.check_content()           │
+    │  - Validate generated answer                 │
+    │  - Same thresholds: [0, 2, 4, 4]             │
+    └──────┬───────────────────────────────────────┘
+           │
+           ├─── Output unsafe? ────┐
+           │                       │
+           │ No                    │ Yes
+           │                       ▼
+           │              ┌─────────────────────────────┐
+           │              │ Override response with      │
+           │              │ "CONTENT POLICY VIOLATION"  │
+           │              │ Do not show LLM output      │
+           │              └─────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      PHASE 6: DISPLAY RESULT                              │
+└──────────────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Render assistant message                     │
+    │  - st.chat_message("assistant")              │
+    │  - Display final answer                      │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Update session state                         │
+    │  - Append to st.session_state.messages       │
+    │    * {"role": "user", "content": question}   │
+    │    * {"role": "assistant", "content": answer}│
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Check violation count                        │
+    │  - If >= 3: Show error, stop session         │
+    └──────┬───────────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────────────────┐
+    │ Ready for next question                      │
+    └──────────────────────────────────────────────┘
+```
+
+---
+
+## 🖼️ Image Annotation Workflow
+
+### Vision LLM Processing Detail
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    IMAGE ANNOTATION PIPELINE                             │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    ┌──────────────┐
+    │ Docling      │
+    │ extracts     │
+    │ PictureItems │
+    └──────┬───────┘
+           │
+           ▼
+    ┌────────────────────────────────────────┐
+    │ For each picture in doc.pictures:      │
+    └────────┬───────────────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                        PER-IMAGE PROCESSING                                 │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ 1. Extract PIL Image                     │                            │
+│    │    - picture.image.pil_image             │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ 2. Save to temporary file                │                            │
+│    │    - temp_dir/image_{index}.png          │                            │
+│    │    - pil_image.save(path)                │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ 3. Load image as base64                  │                            │
+│    │    - Read file as bytes                  │                            │
+│    │    - Encode to base64 string             │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ 4. Prepare Vision LLM prompt             │                            │
+│    │                                          │                            │
+│    │    7-Section Structured Prompt:          │                            │
+│    │                                          │                            │
+│    │    ┌────────────────────────────────┐   │                            │
+│    │    │ 1. OVERVIEW & CONTENT          │   │                            │
+│    │    │    "What is shown..."          │   │                            │
+│    │    ├────────────────────────────────┤   │                            │
+│    │    │ 2. VISUAL ELEMENTS             │   │                            │
+│    │    │    "Describe colors..."        │   │                            │
+│    │    ├────────────────────────────────┤   │                            │
+│    │    │ 3. TEXT CONTENT                │   │                            │
+│    │    │    "Transcribe any text..."    │   │                            │
+│    │    ├────────────────────────────────┤   │                            │
+│    │    │ 4. TECHNICAL DETAILS           │   │                            │
+│    │    │    "Identify charts..."        │   │                            │
+│    │    ├────────────────────────────────┤   │                            │
+│    │    │ 5. CONTEXT & PURPOSE           │   │                            │
+│    │    │    "Explain the purpose..."    │   │                            │
+│    │    ├────────────────────────────────┤   │                            │
+│    │    │ 6. KEY INSIGHTS                │   │                            │
+│    │    │    "Highlight findings..."     │   │                            │
+│    │    ├────────────────────────────────┤   │                            │
+│    │    │ 7. RELEVANCE                   │   │                            │
+│    │    │    "How does this relate..."   │   │                            │
+│    │    └────────────────────────────────┘   │                            │
+│    │                                          │                            │
+│    │    Target: 500-1000 words                │                            │
+│    │                                          │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ 5. Call Ollama Vision API                │                            │
+│    │    - Model: llama3.2-vision:11b-q8_0     │                            │
+│    │    - Temperature: 0.7                    │                            │
+│    │    - num_predict: 2048                   │                            │
+│    │    - Format: json with "message" field   │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ 6. Parse VLM response                    │                            │
+│    │    - Extract text description            │                            │
+│    │    - Validate completeness               │                            │
+│    │    - Handle errors gracefully            │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ 7. Store annotation                      │                            │
+│    │    - Key: image index                    │                            │
+│    │    - Value: {                            │                            │
+│    │        'uri': image_path,                │                            │
+│    │        'description': vlm_output         │                            │
+│    │      }                                   │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+└───────────┼─────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+    ┌────────────────────────────────────────┐
+    │ Repeat for all images                  │
+    └────────┬───────────────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                    MERGE ANNOTATIONS INTO DOCUMENT                          │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ Get document markdown                    │                            │
+│    │  - doc.export_to_markdown()              │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ For each annotation:                     │                            │
+│    │                                          │                            │
+│    │   Insert formatted description:          │                            │
+│    │                                          │                            │
+│    │   "\n\nIMAGE {index} DESCRIPTION:\n"     │                            │
+│    │   + annotation['description']            │                            │
+│    │   + "\n\n"                               │                            │
+│    │                                          │                            │
+│    │   Near corresponding image reference     │                            │
+│    └──────┬───────────────────────────────────┘                            │
+│           │                                                                 │
+│           ▼                                                                 │
+│    ┌──────────────────────────────────────────┐                            │
+│    │ Result: Enhanced document text           │                            │
+│    │  - Original content                      │                            │
+│    │  + Rich image descriptions               │                            │
+│    │  - Ready for chunking                    │                            │
+│    └──────────────────────────────────────────┘                            │
+│                                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🔒 Content Safety Flow
+
+### Dual Validation System
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      CONTENT SAFETY ARCHITECTURE                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+                         INPUT TEXT
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                       LAYER 1: JAILBREAK DETECTION                          │
+│                        (Pattern-Based, Instant)                             │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│    Check against 15 patterns:                                              │
+│                                                                             │
+│    English Patterns:                      Indonesian Patterns:             │
+│    ┌────────────────────────────┐        ┌────────────────────────────┐   │
+│    │ - "ignore previous"         │        │ - "abaikan instruksi"       │   │
+│    │ - "disregard instructions"  │        │ - "lupakan arahan"          │   │
+│    │ - "forget your training"    │        │ - "anda harus"              │   │
+│    │ - "act as", "pretend"       │        │ - "bersikap seperti"        │   │
+│    │ - "new instructions"        │        │ - "perintah baru"           │   │
+│    └────────────────────────────┘        └────────────────────────────┘   │
+│                                                                             │
+│                             │                                               │
+│                             ▼                                               │
+│                   Match found?                                              │
+│                   ├─── Yes ──→ BLOCK (return error)                        │
+│                   └─── No  ──→ Continue to Layer 2                         │
+│                                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                   LAYER 2: AZURE CONTENT SAFETY                             │
+│                     (ML-Based, 0.5-1 second)                                │
+├────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│    API Call to Azure                                                       │
+│    ┌──────────────────────────────────────────────────────────┐           │
+│    │ Endpoint: CONTENT_SAFETY_ENDPOINT                         │           │
+│    │ Key: CONTENT_SAFETY_KEY                                   │           │
+│    │ Language: "id" (Indonesian support)                       │           │
+│    └──────────────────────────────────────────────────────────┘           │
+│                             │                                               │
+│                             ▼                                               │
+│    Analyze 4 Categories:                                                   │
+│    ┌────────────────────────────────────────────────────────────────────┐ │
+│    │                                                                     │ │
+│    │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────┐│ │
+│    │  │   HATE       │  │   SEXUAL     │  │   VIOLENCE   │  │  SELF  ││ │
+│    │  │   SPEECH     │  │   CONTENT    │  │              │  │  HARM  ││ │
+│    │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────┬───┘│ │
+│    │         │                 │                 │              │    │ │
+│    │  Severity: 0-6     Severity: 0-6    Severity: 0-6   Severity: 0-6│ │
+│    │  Threshold: 0      Threshold: 2     Threshold: 4    Threshold: 4│ │
+│    │  (Block all)       (Block medium+)  (Block severe)  (Block severe)│ │
+│    │         │                 │                 │              │    │ │
+│    └─────────┼─────────────────┼─────────────────┼──────────────┼────┘ │
+│              │                 │                 │              │      │
+│              └─────────┬───────┴─────────┬───────┴──────────────┘      │
+│                        │                 │                              │
+│                        ▼                 ▼                              │
+│                 Any threshold      All under                            │
+│                 exceeded?          thresholds?                          │
+│                        │                 │                              │
+│                  YES   │                 │  NO                          │
+│                        │                 │                              │
+│                        ▼                 ▼                              │
+│                ┌───────────────┐  ┌──────────────┐                     │
+│                │  BLOCK        │  │  ALLOW       │                     │
+│                │  Return:      │  │  Continue    │                     │
+│                │  - is_safe=   │  │  processing  │                     │
+│                │    False      │  │              │                     │
+│                │  - details    │  │              │                     │
+│                └───────────────┘  └──────────────┘                     │
+│                                                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+
+THRESHOLD RATIONALE:
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Category  │ Threshold │ Reasoning                                          │
+├───────────┼───────────┼────────────────────────────────────────────────────┤
+│ Hate      │     0     │ Zero tolerance policy - all hate speech blocked   │
+│ Sexual    │     2     │ Block medium+ (allows mild educational content)   │
+│ Violence  │     4     │ Allow descriptive (block graphic/glorified)       │
+│ SelfHarm  │     4     │ Allow educational (block instructional/graphic)   │
+└────────────────────────────────────────────────────────────────────────────┘
+
+VIOLATION TRACKING:
+┌────────────────────────────────────────────────────────────────────────────┐
+│  Each violation increments counter                                         │
+│  After 3 violations → Block session completely                             │
+│  User must restart application                                             │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 Performance Metrics & Timings
+
+### Typical Processing Times
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      DOCUMENT PROCESSING TIMES                           │
+│                      (10-page PDF with 3 images)                         │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Docling Conversion        ████████████░░░░░░░░  5-10 seconds
+Image Annotation (3)      ████████████████████  6-15 seconds (2-5 sec/img)
+Chunking                  ██░░░░░░░░░░░░░░░░░░  2-5 seconds
+Embedding (100 chunks)    ██████████░░░░░░░░░░  5-10 seconds
+VectorDB Creation         ██░░░░░░░░░░░░░░░░░░  1-3 seconds
+                          ──────────────────────
+TOTAL:                    ████████████████████  19-43 seconds
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Q&A RESPONSE TIMES                               │
+│                         (Single question)                                │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Jailbreak Detection       ░░░░░░░░░░░░░░░░░░░░  <0.1 seconds
+Input Safety Check        ████░░░░░░░░░░░░░░░░  0.5-1 seconds
+Vector Search             ██░░░░░░░░░░░░░░░░░░  0.1-0.5 seconds
+Re-ranking                ████░░░░░░░░░░░░░░░░  0.5-1 seconds
+LLM Generation            ████████████████░░░░  3-10 seconds (streaming)
+Output Safety Check       ████░░░░░░░░░░░░░░░░  0.5-1 seconds
+                          ──────────────────────
+TOTAL (to first token):   ██████░░░░░░░░░░░░░░  1.1-2.6 seconds
+TOTAL (complete):         ████████████████████  5-14 seconds
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         GPU MEMORY USAGE                                 │
+│                         (NVIDIA A10 8GB)                                 │
+└─────────────────────────────────────────────────────────────────────────┘
+
+Idle State                ███░░░░░░░░░░░░░░░░░  ~2GB
+Embeddings (CPU)          ███░░░░░░░░░░░░░░░░░  ~2GB (no GPU impact)
+Text LLM (llama3.1:8b)    ████████░░░░░░░░░░░░  ~5GB
+Vision LLM (Q8)           ██████████████░░░░░░  ~7GB (peak)
+```
+
+---
+
+## 🔄 Session State Management
+
+### Streamlit State Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                       SESSION STATE LIFECYCLE                            │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    ┌──────────────┐
+    │  App Launch  │
+    └──────┬───────┘
+           │
+           ▼
+    ┌─────────────────────────────────────┐
+    │ Initialize Session State            │
+    │  - initialized: False               │
+    │  - chatbot: None                    │
+    │  - messages: []                     │
+    │  - processing_stats: None           │
+    │  - annotations: {}                  │
+    │  - violation_count: 0               │
+    └──────┬──────────────────────────────┘
+           │
+           ▼
+    ┌─────────────────────────────────────┐
+    │ Wait for User Action                │
+    └──────┬──────────────────────────────┘
+           │
+           ├───────┬───────────────┬───────┐
+           │       │               │       │
+           ▼       ▼               ▼       ▼
+    ┌──────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐
+    │  Upload  │ │ Process │ │   Ask   │ │  Reset   │
+    │   PDF    │ │   Doc   │ │Question │ │  Buttons │
+    └──────────┘ └────┬────┘ └────┬────┘ └────┬─────┘
+                      │           │           │
+                      ▼           │           │
+    ┌─────────────────────────────────────┐   │
+    │ PROCESSING STATE                    │   │
+    │  - initialized: True                │   │
+    │  - chatbot: instance                │   │
+    │  - processing_stats: {              │   │
+    │      num_chunks: X,                 │   │
+    │      num_images: Y,                 │   │
+    │      annotations: {...}             │   │
+    │    }                                │   │
+    │  - messages: []                     │   │
+    └──────┬──────────────────────────────┘   │
+           │                                   │
+           ├───────────────────────────────────┘
+           │
+           ▼
+    ┌─────────────────────────────────────┐
+    │ READY FOR Q&A                       │
+    │  - Chat input enabled               │
+    │  - Can ask questions                │
+    └──────┬──────────────────────────────┘
+           │
+           ▼
+    ┌─────────────────────────────────────┐
+    │ Q&A ACTIVE                          │
+    │  - messages: [                      │
+    │      {role:"user", content:"Q1"},   │
+    │      {role:"assistant", content:"A1"},│
+    │      {role:"user", content:"Q2"},   │
+    │      {role:"assistant", content:"A2"},│
+    │      ...                            │
+    │    ]                                │
+    │  - History: last 6 messages         │
+    └──────┬──────────────────────────────┘
+           │
+           ├─── Content Violation? ───┐
+           │                          │
+           │ No                       │ Yes
+           │                          ▼
+           │              ┌────────────────────────┐
+           │              │ Increment violation    │
+           │              │ violation_count += 1   │
+           │              └───────┬────────────────┘
+           │                      │
+           │                      ├── Count >= 3? ───┐
+           │                      │                   │
+           │                      │ No                │ Yes
+           │                      │                   ▼
+           │                      │         ┌──────────────────┐
+           │                      │         │ BLOCKED STATE    │
+           │                      │         │ - Show error     │
+           │                      │         │ - Stop processing│
+           │                      │         │ - Require restart│
+           │                      │         └──────────────────┘
+           │                      │
+           │◄─────────────────────┘
+           │
+           ▼
+    Continue Q&A loop
+
+STATE TRANSITIONS:
+┌────────────────────────────────────────────────────────────────────────────┐
+│ FROM              │ ACTION              │ TO                               │
+├───────────────────┼─────────────────────┼──────────────────────────────────┤
+│ Idle              │ Upload PDF          │ Ready to Process                 │
+│ Ready to Process  │ Click "Process"     │ Processing                       │
+│ Processing        │ Complete success    │ Ready for Q&A                    │
+│ Ready for Q&A     │ Ask question        │ Q&A Active                       │
+│ Q&A Active        │ Receive answer      │ Ready for Q&A                    │
+│ Q&A Active        │ 3rd violation       │ Blocked                          │
+│ Any               │ "Clear All & Start" │ Idle                             │
+│ Q&A Active        │ "Reset Chat"        │ Ready for Q&A (keep doc)         │
+│ Any               │ Upload new PDF      │ Ready to Process (reset state)   │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🎯 Quick Reference: File→Function Map
+
+```
+secure_chatbot_with_images.py (956 lines)
+│
+├── Lines 27-41:  Environment Setup
+│   └── TOKENIZERS_PARALLELISM=false
+│
+├── Lines 44-130:  ContentSafetyGuard Class
+│   ├── __init__(): Initialize Azure client
+│   ├── detect_jailbreak(): Pattern matching
+│   └── check_content(): Azure API validation
+│
+├── Lines 133-357: ImageAnnotator Class
+│   ├── __init__(): Initialize Ollama vision
+│   ├── describe_image_with_vlm(): 7-section prompt
+│   └── annotate_images_in_document(): Batch processing
+│
+├── Lines 360-674: SecureChatbotRAGWithImages Class
+│   ├── __init__(): Setup LLM, embeddings, chunker
+│   ├── process_document(): PDF → VectorDB pipeline
+│   └── stream_response(): Q&A with safety checks
+│
+└── Lines 676-956: Streamlit UI (main function)
+    ├── Session state initialization
+    ├── Sidebar: Upload & process
+    ├── Main area: Chat & images
+    └── Input: Question handling
+```
+
+---
+
+**For More Information:**
+- [README.md](README.md) - Setup and installation guide
+- [CODE_GUIDE.md](CODE_GUIDE.md) - Detailed code walkthrough
+- Source code comments - Inline documentation
+
+**Version**: 1.0.0  
+**Last Updated**: November 2025
