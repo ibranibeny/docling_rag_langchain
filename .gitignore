@@ -1,0 +1,54 @@
+# Vector Database
+chroma_db/
+
+# OCR Output
+extracted_pdf_images/
+ocr_extracted_text.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+docling_env/
+chatbot_env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploaded PDFs (optional - comment out if you want to track them)
+uploaded_pdfs/
+
+# Temporary files
+*.log
+*.tmp
+temp_pdf_images/
