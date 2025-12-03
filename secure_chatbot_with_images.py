@@ -21,6 +21,16 @@ from azure.core.credentials import AzureKeyCredential
 from azure.ai.contentsafety.models import AnalyzeTextOptions
 from azure.core.exceptions import HttpResponseError
 
+# Import for OCR capabilities
+try:
+    import fitz  # PyMuPDF
+    from rapidocr_onnxruntime import RapidOCR
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    fitz = None
+    RapidOCR = None
+
 # Suppress tokenizer parallelism warning and sequence length warning
 # See: https://github.com/huggingface/transformers/issues/5486
 # See: https://github.com/docling-project/docling-core/issues/119#issuecomment-2577418826
@@ -130,6 +140,171 @@ class ContentSafetyGuard:
             "confidence": "high" if len(detected) > 0 else "low",
             "patterns": detected
         }
+
+
+class OCRExtractor:
+    """Extract high-resolution images from PDF and apply OCR"""
+    
+    def __init__(self, zoom_factor: float = 3.0, output_dir: str = "extracted_pdf_images"):
+        """
+        Initialize OCR extractor
+        
+        Args:
+            zoom_factor: Resolution multiplier (3.0 = 3x zoom for high quality)
+            output_dir: Directory to save extracted images
+        """
+        self.zoom_factor = zoom_factor
+        self.output_dir = Path(output_dir)
+        self.ocr_engine = RapidOCR() if OCR_AVAILABLE and RapidOCR else None
+        self.extracted_images = []
+        self.ocr_text_by_page = {}
+    
+    def extract_images_from_pdf(self, pdf_path: str, progress_callback=None):
+        """Extract all pages as high-resolution PNG images"""
+        if not OCR_AVAILABLE or not fitz:
+            if progress_callback:
+                progress_callback("⚠️ PyMuPDF not available, skipping image extraction")
+            return []
+        
+        self.output_dir.mkdir(exist_ok=True)
+        
+        doc = fitz.open(pdf_path)
+        self.extracted_images = []
+        
+        if progress_callback:
+            progress_callback(f"📷 Extracting {len(doc)} pages as high-res images (zoom={self.zoom_factor}x)...")
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            
+            # Convert page to high-resolution image
+            mat = fitz.Matrix(self.zoom_factor, self.zoom_factor)
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Save image
+            img_path = self.output_dir / f"page_{page_num + 1}.png"
+            pix.save(str(img_path))
+            
+            self.extracted_images.append({
+                "page_num": page_num + 1,
+                "path": str(img_path),
+                "width": pix.width,
+                "height": pix.height
+            })
+            
+            if progress_callback and (page_num + 1) % 5 == 0:
+                progress_callback(f"   📄 Extracted {page_num + 1}/{len(doc)} pages...")
+        
+        doc.close()
+        
+        if progress_callback:
+            progress_callback(f"✅ Extracted {len(self.extracted_images)} page images")
+        
+        return self.extracted_images
+    
+    def apply_ocr_to_images(self, progress_callback=None):
+        """Apply RapidOCR to all extracted images"""
+        if not self.ocr_engine:
+            if progress_callback:
+                progress_callback("⚠️ RapidOCR not available, skipping OCR")
+            return {}
+        
+        if progress_callback:
+            progress_callback(f"🔍 Applying OCR to {len(self.extracted_images)} images...")
+        
+        self.ocr_text_by_page = {}
+        total_chars = 0
+        
+        for img_info in self.extracted_images:
+            page_num = img_info["page_num"]
+            img_path = img_info["path"]
+            
+            try:
+                result, elapse = self.ocr_engine(img_path)
+                
+                if result:
+                    # Extract text from OCR result
+                    page_text = []
+                    for line in result:
+                        text = line[1]  # line format: [bbox, text, confidence]
+                        page_text.append(text)
+                    
+                    page_content = "\n".join(page_text)
+                    self.ocr_text_by_page[page_num] = page_content
+                    total_chars += len(page_content)
+                    
+                    if progress_callback and page_num % 5 == 0:
+                        progress_callback(f"   📝 OCR processed page {page_num}/{len(self.extracted_images)}...")
+                else:
+                    self.ocr_text_by_page[page_num] = "[No text detected]"
+                    
+            except Exception as e:
+                self.ocr_text_by_page[page_num] = f"[OCR Error: {str(e)[:100]}]"
+        
+        if progress_callback:
+            progress_callback(f"✅ OCR complete: {total_chars:,} characters extracted")
+        
+        return self.ocr_text_by_page
+    
+    def save_ocr_text(self, output_file: str = "ocr_extracted_text.txt", progress_callback=None):
+        """Save all OCR text to a file"""
+        output_path = Path(output_file)
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(f"# OCR Extracted Text\n")
+            f.write(f"Total Pages: {len(self.ocr_text_by_page)}\n")
+            f.write(f"Extraction Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("\n" + "=" * 60 + "\n\n")
+            
+            for page_num in sorted(self.ocr_text_by_page.keys()):
+                f.write(f"## Page {page_num}\n\n")
+                f.write(self.ocr_text_by_page[page_num])
+                f.write("\n\n" + "-" * 60 + "\n\n")
+        
+        if progress_callback:
+            progress_callback(f"💾 OCR text saved to: {output_path.absolute()}")
+        
+        return str(output_path.absolute())
+    
+    def get_combined_text(self):
+        """Get all OCR text combined as a single string"""
+        combined = []
+        for page_num in sorted(self.ocr_text_by_page.keys()):
+            combined.append(f"[Page {page_num}]\n{self.ocr_text_by_page[page_num]}")
+        return "\n\n".join(combined)
+    
+    def get_ocr_chunks(self):
+        """Get OCR text as structured chunks for vector DB indexing"""
+        chunks = []
+        for page_num in sorted(self.ocr_text_by_page.keys()):
+            text = self.ocr_text_by_page[page_num]
+            # Skip empty or error pages
+            if text and not text.startswith("[No text detected]") and not text.startswith("[OCR Error"):
+                chunks.append({
+                    "page": page_num,
+                    "text": text,
+                    "source": "ocr"
+                })
+        return chunks
+    
+    @staticmethod
+    def is_image_based_pdf(doc_text: str, threshold: int = 500) -> bool:
+        """Check if PDF is image-based (minimal text) or text-based
+        
+        Args:
+            doc_text: Text extracted by Docling
+            threshold: Minimum characters to consider text-based (default 500)
+        
+        Returns:
+            bool: True if image-based (needs OCR), False if text-based
+        """
+        # Remove markdown formatting and whitespace
+        clean_text = doc_text.replace('#', '').replace('*', '').replace('-', '')
+        clean_text = ''.join(clean_text.split())
+        
+        # Check if text content is minimal
+        char_count = len(clean_text)
+        return char_count < threshold
 
 
 class ImageAnnotator:
@@ -405,6 +580,9 @@ class SecureChatbotRAGWithImages:
         # Initialize image annotator with vision model
         self.image_annotator = ImageAnnotator(self.vision_llm)
         
+        # Initialize OCR extractor (3x zoom for high resolution)
+        self.ocr_extractor = OCRExtractor(zoom_factor=3.0, output_dir="./extracted_pdf_images")
+        
         # Prompt template with conversation history
         self.prompt = ChatPromptTemplate.from_template("""
 You are a helpful AI assistant. Answer questions based on the provided context and conversation history.
@@ -459,22 +637,60 @@ Provide a comprehensive answer based on the context and conversation history:"""
         if progress_callback:
             progress_callback(f"✅ Document converted: {doc.name}")
         
-        # Step 1: Annotate images
+        # Step 1: Check PDF content type
         if progress_callback:
-            progress_callback("🖼️ Detecting and annotating images...")
+            progress_callback("🔍 Analyzing PDF content type...")
+        
+        # Export to get initial text
+        initial_text = doc.export_to_markdown()
+        is_image_pdf = OCRExtractor.is_image_based_pdf(initial_text)
+        
+        if is_image_pdf:
+            if progress_callback:
+                progress_callback("📋 Detected: IMAGE-BASED PDF (minimal text)")
+                progress_callback("🔄 OCR akan digunakan untuk ekstraksi teks")
+        else:
+            if progress_callback:
+                progress_callback("📋 Detected: TEXT-BASED PDF (dengan text/table/image)")
+                progress_callback("✅ Docling + VLM akan digunakan (OCR tidak diperlukan)")
+        
+        # Step 2: Apply OCR only for image-based PDFs
+        use_ocr = False
+        if is_image_pdf and OCR_AVAILABLE:
+            if progress_callback:
+                progress_callback("📷 Extracting high-resolution page images...")
+            
+            self.ocr_extractor.extract_images_from_pdf(pdf_path, progress_callback)
+            
+            if progress_callback:
+                progress_callback("🔍 Applying RapidOCR to extracted images...")
+            
+            self.ocr_extractor.apply_ocr_to_images(progress_callback)
+            
+            # Save OCR text to file
+            ocr_output_file = "./ocr_extracted_text.txt"
+            self.ocr_extractor.save_ocr_text(ocr_output_file, progress_callback)
+            use_ocr = True
+        elif is_image_pdf and not OCR_AVAILABLE:
+            if progress_callback:
+                progress_callback("⚠️ PDF is image-based but OCR not available")
+                progress_callback("💡 Install PyMuPDF and rapidocr-onnxruntime for better extraction")
+        
+        # Step 3: Annotate images/tables/charts with VLM (Docling's primary feature)
+            progress_callback("🖼️ Detecting and annotating images/tables/charts with VLM...")
         
         self.annotated_images = self.image_annotator.annotate_images_in_document(
             doc, 
             progress_callback=progress_callback
         )
         
-        # Step 2: Export document to markdown (includes text)
+        # Step 4: Export document to markdown (includes text/tables/images)
         if progress_callback:
-            progress_callback("📝 Exporting document text...")
+            progress_callback("📝 Exporting document content (text/tables/images)...")
         
         doc_text = doc.export_to_markdown()
         
-        # Step 3: Merge image annotations into text
+        # Step 5: Merge image annotations into text
         if progress_callback:
             progress_callback("🔗 Merging image annotations into document...")
         
@@ -483,7 +699,7 @@ Provide a comprehensive answer based on the context and conversation history:"""
             self.annotated_images
         )
         
-        # Step 4: Chunk the enriched document using HybridChunker
+        # Step 6: Chunk the enriched document using HybridChunker
         if progress_callback:
             progress_callback("✂️ Chunking document with HybridChunker...")
         
@@ -528,12 +744,58 @@ Provide a comprehensive answer based on the context and conversation history:"""
                 )
             )
         
+        # Add OCR chunks ONLY if PDF was image-based and OCR was used
+        # For text-based PDFs, Docling already extracted everything properly
+        if use_ocr and self.ocr_extractor.ocr_text_by_page:
+            ocr_chunks = self.ocr_extractor.get_ocr_chunks()
+            if progress_callback:
+                progress_callback(f"📋 Adding {len(ocr_chunks)} OCR chunks to vector store (image-based PDF)...")
+            
+            for ocr_chunk in ocr_chunks:
+                # Split large OCR pages into smaller chunks if needed (max 1000 chars per chunk)
+                ocr_text = ocr_chunk['text']
+                page_num = ocr_chunk['page']
+                
+                if len(ocr_text) > 1000:
+                    # Split into smaller chunks
+                    chunk_size = 1000
+                    for i in range(0, len(ocr_text), chunk_size):
+                        chunk_text = ocr_text[i:i+chunk_size]
+                        documents.append(
+                            Document(
+                                page_content=f"[OCR Page {page_num} - Part {i//chunk_size + 1}]\n\n{chunk_text}",
+                                metadata={
+                                    "source": pdf_path,
+                                    "chunk_id": f"ocr_page_{page_num}_part_{i//chunk_size}",
+                                    "type": "ocr_text",
+                                    "page": str(page_num),
+                                    "ocr_part": i//chunk_size
+                                }
+                            )
+                        )
+                else:
+                    documents.append(
+                        Document(
+                            page_content=f"[OCR Page {page_num}]\n\n{ocr_text}",
+                            metadata={
+                                "source": pdf_path,
+                                "chunk_id": f"ocr_page_{page_num}",
+                                "type": "ocr_text",
+                                "page": str(page_num)
+                            }
+                        )
+                    )
+        
         documents = filter_complex_metadata(documents)
         
+        ocr_chunks_count = len(self.ocr_extractor.get_ocr_chunks()) if use_ocr else 0
         if progress_callback:
-            progress_callback(f"📊 Created {len(documents)} chunks ({len(chunks_list)} text + {len(self.annotated_images)} images)")
+            if ocr_chunks_count > 0:
+                progress_callback(f"📊 Created {len(documents)} chunks ({len(chunks_list)} text + {len(self.annotated_images)} images + {ocr_chunks_count} OCR chunks)")
+            else:
+                progress_callback(f"📊 Created {len(documents)} chunks ({len(chunks_list)} text + {len(self.annotated_images)} images - Docling extraction)")
         
-        # Step 5: Create or update vector store
+        # Step 7: Create or update vector store
         if progress_callback:
             progress_callback("🔢 Creating vector store...")
         
@@ -565,11 +827,19 @@ Provide a comprehensive answer based on the context and conversation history:"""
         if progress_callback:
             progress_callback("✅ Vector store ready!")
         
+        ocr_chunks_count = len(self.ocr_extractor.get_ocr_chunks()) if use_ocr else 0
+        
         return {
             "total_chunks": len(documents),
             "text_chunks": len(chunks_list),
             "image_chunks": len(self.annotated_images),
-            "images_found": len(self.annotated_images)
+            "images_found": len(self.annotated_images),
+            "ocr_chunks": ocr_chunks_count,
+            "ocr_pages": len(self.ocr_extractor.ocr_text_by_page) if use_ocr else 0,
+            "ocr_images_saved": len(self.ocr_extractor.extracted_images) if use_ocr else 0,
+            "ocr_available": OCR_AVAILABLE,
+            "ocr_used": use_ocr,
+            "pdf_type": "image-based" if is_image_pdf else "text-based"
         }
     
     def rerank_results(self, query: str, documents, top_k: int = 5):
@@ -633,10 +903,14 @@ Provide a comprehensive answer based on the context and conversation history:"""
         reranked_results = self.rerank_results(question, initial_results, top_k=top_k_rerank)
         top_docs = [doc for doc, score in reranked_results]
         
-        # Check if any image annotations in top results
+        # Check if any image annotations or OCR text in top results
         image_docs = [doc for doc in top_docs if doc.metadata.get("type") == "image_annotation"]
+        ocr_docs = [doc for doc in top_docs if doc.metadata.get("type") == "ocr_text"]
+        
         if image_docs:
             yield {"type": "status", "content": f"🖼️ Ditemukan {len(image_docs)} gambar relevan dalam hasil"}
+        if ocr_docs:
+            yield {"type": "status", "content": f"📋 Ditemukan {len(ocr_docs)} chunk OCR relevan dalam hasil"}
         
         # Step 5: Generate response with streaming
         yield {"type": "status", "content": "💭 Menghasilkan jawaban..."}
@@ -785,6 +1059,31 @@ def main():
             st.metric("🖼️ Images Found", stats.get("images_found", 0))
             st.metric("Image Chunks", stats.get("image_chunks", 0))
             
+            # Show PDF type detection
+            st.markdown("---")
+            st.markdown("### 📋 PDF Analysis")
+            pdf_type = stats.get("pdf_type", "unknown")
+            if pdf_type == "image-based":
+                st.warning(f"📸 Type: {pdf_type.upper()}")
+                st.caption("PDF berisi gambar scan - OCR digunakan")
+            else:
+                st.success(f"📝 Type: {pdf_type.upper()}")
+                st.caption("PDF berisi text/table/image - Docling + VLM digunakan")
+            
+            # Show OCR stats only if OCR was actually used
+            if stats.get("ocr_used"):
+                st.markdown("---")
+                st.markdown("### 🔍 OCR Stats (Image-based PDF)")
+                st.metric("OCR Chunks Indexed", stats.get("ocr_chunks", 0))
+                st.metric("OCR Pages Processed", stats.get("ocr_pages", 0))
+                st.metric("OCR Images Saved", stats.get("ocr_images_saved", 0))
+                if stats.get("ocr_chunks", 0) > 0:
+                    st.success("✅ OCR text indexed in vector database")
+                    st.info("📄 OCR text saved to ocr_extracted_text.txt")
+                    st.info("📁 Images saved to extracted_pdf_images/")
+            elif stats.get("pdf_type") == "text-based":
+                st.info("ℹ️ OCR tidak diperlukan - Docling berhasil ekstrak text/table/image")
+            
             st.markdown("---")
             st.markdown("### 💬 Chat Stats")
             st.metric("Messages", len(st.session_state.messages))
@@ -824,6 +1123,19 @@ def main():
         - 📝 Context enrichment
         - 🔗 Merged into vectorization
         """)
+        
+        if OCR_AVAILABLE:
+            st.markdown("---")
+            st.markdown("### 🔍 OCR Features (Fallback)")
+            st.markdown("""
+            - ✅ Auto-detect PDF type
+            - 📷 High-res extraction (image PDFs)
+            - 🔤 RapidOCR text extraction
+            - 💾 Save images & text files
+            - 📋 Indexed in vector database
+            - 🎯 Only used for image-based PDFs
+            """)
+            st.caption("OCR hanya digunakan untuk PDF full image. Text-based PDF menggunakan Docling + VLM.")
     
     # Main chat area
     st.title("💬 Secure RAG Chatbot with Image Understanding")
@@ -838,9 +1150,11 @@ def main():
             st.markdown("""
             **📄 Document Processing:**
             - Upload custom PDFs
-            - Automatic image detection
-            - AI-powered image annotation
+            - Auto-detect PDF type (text/image)
+            - Docling: text/table/image extraction
+            - VLM: image/table/chart annotation
             - Context-aware chunking
+            - OCR fallback (image-only PDFs)
             """)
         
         with col2:
